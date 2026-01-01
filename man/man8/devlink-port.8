@@ -109,6 +109,10 @@ devlink-port \- devlink port configuration
 ]
 
 .ti -8
+.B devlink port resource show
+.RI "[ " DEV/PORT_INDEX " ]"
+
+.ti -8
 .B devlink port help
 
 .SH "DESCRIPTION"
@@ -293,6 +297,13 @@ If this argument, as well as port index, are omitted - all parameters supported 
 Is an alias for
 .BR devlink-rate (8).
 
+.SS devlink port resource show - display port resources
+
+.PP
+.I "DEV/PORT_INDEX"
+- specifies the devlink port to show resources for.
+If this argument is omitted all ports resources are listed.
+
 .SH "EXAMPLES"
 .PP
 devlink port show
@@ -415,6 +426,16 @@ the function usage is completed, deactivate the function and finally delete
 the port. When there is desire to reuse the port without deletion, it can be
 reconfigured and activated again when function is in inactive state and
 function's operational state is detached.
+.RE
+.PP
+devlink port resource show pci/0000:03:00.0/1
+.RS 4
+Shows resources for a specific devlink port.
+.RE
+.PP
+devlink port resource show
+.RS 4
+Shows resources for all devlink ports.
 .RE
 
 .SH SEE ALSO

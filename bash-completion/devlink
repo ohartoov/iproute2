@@ -411,6 +411,20 @@ _devlink_port_param()
     fi
 }
 
+# Completion for devlink port resource
+_devlink_port_resource()
+{
+    case "$cword" in
+        3)
+            COMPREPLY=( $( compgen -W "show" -- "$cur" ) )
+            return
+            ;;
+        4)
+            _devlink_direct_complete "port"
+            return
+            ;;
+    esac
+}
 # Completion for devlink port
 _devlink_port()
 {
@@ -425,6 +439,10 @@ _devlink_port()
             ;;
         param)
             _devlink_port_param
+            return
+            ;;
+        resource)
+            _devlink_port_resource
             return
             ;;
         show|unsplit)
