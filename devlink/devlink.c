@@ -4909,6 +4909,7 @@ static void cmd_port_help(void)
 	pr_err("       devlink port add DEV/PORT_INDEX flavour FLAVOUR pfnum PFNUM\n"
 	       "                      [ sfnum SFNUM ][ controller CNUM ]\n");
 	pr_err("       devlink port del DEV/PORT_INDEX\n");
+	pr_err("       devlink port resource show [ DEV | DEV/PORT_INDEX ]\n");
 }
 
 static const char *port_type_name(uint32_t type)
@@ -5956,51 +5957,6 @@ static int cmd_port_del(struct dl *dl)
 	dl_opts_put(nlh, dl);
 
 	return mnlu_gen_socket_sndrcv(&dl->nlg, nlh, NULL, NULL);
-}
-
-static int cmd_port(struct dl *dl)
-{
-	if (dl_argv_match(dl, "help")) {
-		cmd_port_help();
-		return 0;
-	} else if (dl_argv_match(dl, "show") ||
-		   dl_argv_match(dl, "list") ||  dl_no_arg(dl)) {
-		dl_arg_inc(dl);
-		return cmd_port_show(dl);
-	} else if (dl_argv_match(dl, "set")) {
-		dl_arg_inc(dl);
-		return cmd_port_set(dl);
-	} else if (dl_argv_match(dl, "split")) {
-		dl_arg_inc(dl);
-		return cmd_port_split(dl);
-	} else if (dl_argv_match(dl, "unsplit")) {
-		dl_arg_inc(dl);
-		return cmd_port_unsplit(dl);
-	} else if (dl_argv_match(dl, "param")) {
-		dl_arg_inc(dl);
-		return cmd_port_param(dl);
-	} else if (dl_argv_match(dl, "function")) {
-		dl_arg_inc(dl);
-		return cmd_port_function(dl);
-	} else if (dl_argv_match(dl, "health")) {
-		dl_arg_inc(dl);
-		if (dl_argv_match(dl, "list") || dl_no_arg(dl)
-		    || (dl_argv_match(dl, "show") && dl_argc(dl) == 1)) {
-			dl_arg_inc(dl);
-			return __cmd_health_show(dl, false, true);
-		} else {
-			return cmd_health(dl);
-		}
-	} else if (dl_argv_match(dl, "add")) {
-		dl_arg_inc(dl);
-		return cmd_port_add(dl);
-	} else if (dl_argv_match(dl, "del")) {
-		dl_arg_inc(dl);
-		return cmd_port_del(dl);
-	}
-
-	pr_err("Command \"%s\" not found\n", dl_argv(dl));
-	return -ENOENT;
 }
 
 static void cmd_linecard_help(void)
@@ -9027,6 +8983,143 @@ static int cmd_resource(struct dl *dl)
 		dl_arg_inc(dl);
 		return cmd_resource_set(dl);
 	}
+	pr_err("Command \"%s\" not found\n", dl_argv(dl));
+	return -ENOENT;
+}
+
+static void pr_out_port_resource(struct dl *dl, struct nlattr **tb)
+{
+	struct resource *resource;
+	struct resource_ctx ctx = {};
+	int err;
+
+	err = resource_ctx_init(&ctx, dl);
+	if (err)
+		return;
+
+	err = resources_get(&ctx, tb);
+	if (err)
+		goto out;
+
+	pr_out_port_handle_start_arr(dl, tb, false);
+	list_for_each_entry(resource, &ctx.resources->resource_list, list) {
+		check_indent_newline(dl);
+		print_string(PRINT_ANY, "name", "name %s", resource->name);
+		pr_out_u64(dl, "size", resource->size);
+		if (resource->size != resource->size_new)
+			pr_out_u64(dl, "size_new", resource->size_new);
+		if (resource->occ_valid)
+			print_uint(PRINT_ANY, "occ", " occ %u", resource->size_occ);
+		print_string(PRINT_ANY, "unit", " unit %s",
+			     resource_unit_str_get(resource->unit));
+	}
+	pr_out_port_handle_end(dl);
+
+out:
+	resource_ctx_fini(&ctx);
+}
+
+static int cmd_port_resource_show_cb(const struct nlmsghdr *nlh, void *data)
+{
+	struct dl *dl = data;
+	struct nlattr *tb[DEVLINK_ATTR_MAX + 1] = {};
+	struct genlmsghdr *genl = mnl_nlmsg_get_payload(nlh);
+
+	mnl_attr_parse(nlh, sizeof(*genl), attr_cb, tb);
+	if (!tb[DEVLINK_ATTR_BUS_NAME] || !tb[DEVLINK_ATTR_DEV_NAME] ||
+	    !tb[DEVLINK_ATTR_PORT_INDEX] || !tb[DEVLINK_ATTR_RESOURCE_LIST])
+		return MNL_CB_ERROR;
+
+	pr_out_port_resource(dl, tb);
+	return MNL_CB_OK;
+}
+
+static void cmd_port_resource_help(void)
+{
+	pr_err("Usage: devlink port resource show [ DEV | DEV/PORT_INDEX ]\n");
+}
+
+static int cmd_port_resource_show(struct dl *dl)
+{
+	struct nlmsghdr *nlh;
+	uint16_t flags = NLM_F_REQUEST | NLM_F_ACK;
+	int err;
+
+	err = dl_argv_parse_with_selector(dl, &flags, DEVLINK_CMD_PORT_RESOURCE_GET,
+					  DL_OPT_HANDLEP, 0,
+					  DL_OPT_HANDLE, 0);
+	if (err)
+		return err;
+
+	nlh = mnlu_gen_socket_cmd_prepare(&dl->nlg, DEVLINK_CMD_PORT_RESOURCE_GET,
+					  flags);
+
+	dl_opts_put(nlh, dl);
+
+	pr_out_section_start(dl, "resources");
+	err = mnlu_gen_socket_sndrcv(&dl->nlg, nlh, cmd_port_resource_show_cb, dl);
+	pr_out_section_end(dl);
+	return err;
+}
+
+static int cmd_port_resource(struct dl *dl)
+{
+	if (dl_argv_match(dl, "help")) {
+		cmd_port_resource_help();
+		return 0;
+	} else if (dl_argv_match(dl, "show") ||
+		   dl_argv_match(dl, "list") || dl_no_arg(dl)) {
+		dl_arg_inc(dl);
+		return cmd_port_resource_show(dl);
+	}
+	pr_err("Command \"%s\" not found\n", dl_argv(dl));
+	return -ENOENT;
+}
+
+static int cmd_port(struct dl *dl)
+{
+	if (dl_argv_match(dl, "help")) {
+		cmd_port_help();
+		return 0;
+	} else if (dl_argv_match(dl, "show") ||
+		   dl_argv_match(dl, "list") ||  dl_no_arg(dl)) {
+		dl_arg_inc(dl);
+		return cmd_port_show(dl);
+	} else if (dl_argv_match(dl, "set")) {
+		dl_arg_inc(dl);
+		return cmd_port_set(dl);
+	} else if (dl_argv_match(dl, "split")) {
+		dl_arg_inc(dl);
+		return cmd_port_split(dl);
+	} else if (dl_argv_match(dl, "unsplit")) {
+		dl_arg_inc(dl);
+		return cmd_port_unsplit(dl);
+	} else if (dl_argv_match(dl, "param")) {
+		dl_arg_inc(dl);
+		return cmd_port_param(dl);
+	} else if (dl_argv_match(dl, "function")) {
+		dl_arg_inc(dl);
+		return cmd_port_function(dl);
+	} else if (dl_argv_match(dl, "health")) {
+		dl_arg_inc(dl);
+		if (dl_argv_match(dl, "list") || dl_no_arg(dl)
+		    || (dl_argv_match(dl, "show") && dl_argc(dl) == 1)) {
+			dl_arg_inc(dl);
+			return __cmd_health_show(dl, false, true);
+		} else {
+			return cmd_health(dl);
+		}
+	} else if (dl_argv_match(dl, "add")) {
+		dl_arg_inc(dl);
+		return cmd_port_add(dl);
+	} else if (dl_argv_match(dl, "del")) {
+		dl_arg_inc(dl);
+		return cmd_port_del(dl);
+	} else if (dl_argv_match(dl, "resource")) {
+		dl_arg_inc(dl);
+		return cmd_port_resource(dl);
+	}
+
 	pr_err("Command \"%s\" not found\n", dl_argv(dl));
 	return -ENOENT;
 }

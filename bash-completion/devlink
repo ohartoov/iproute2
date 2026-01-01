@@ -31,7 +31,7 @@ _devlink_direct_complete()
 
     case $1 in
         dev)
-            value=$(devlink dev show 2>/dev/null)
+            value=$(devlink dev show 2>/dev/null | sed "s/:$//")
             ;;
         selftests_id)
             dev=${words[4]}
@@ -411,6 +411,38 @@ _devlink_port_param()
     fi
 }
 
+# Completion for devlink port resource
+_devlink_port_resource()
+{
+    local subcommand=${words[3]}
+
+    if [[ $cword -eq 3 ]]; then
+        COMPREPLY=( $( compgen -W "show" -- "$cur" ) )
+        return
+    fi
+
+    case $subcommand in
+        show)
+            if [[ $cword -eq 4 ]]; then
+                # Handle colons in PCI addresses
+                _get_comp_words_by_ref -n : cur
+
+                local ports=$(devlink -j port show 2>/dev/null \
+                    | jq -r '.port | keys[]')
+                local devs=$(echo "$ports" | sed 's|/[^/]*$||' | sort -u)
+
+                # If device is complete, show device and its ports
+                if echo "$devs" | grep -q "^${cur}$"; then
+                    local matching_ports=$(echo "$ports" | grep "^${cur}/")
+                    COMPREPLY=( $(compgen -W "$cur $matching_ports" -- "$cur") )
+                else
+                    COMPREPLY=( $(compgen -W "$devs $ports" -- "$cur") )
+                fi
+                __ltrim_colon_completions "$cur"
+            fi
+            ;;
+    esac
+}
 # Completion for devlink port
 _devlink_port()
 {
@@ -425,6 +457,10 @@ _devlink_port()
             ;;
         param)
             _devlink_port_param
+            return
+            ;;
+        resource)
+            _devlink_port_resource
             return
             ;;
         show|unsplit)
