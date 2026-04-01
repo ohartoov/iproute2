@@ -701,8 +701,9 @@ _devlink_resource()
 {
     case $command in
         show)
-            if [[ $cword -eq 3 ]]; then
+            if [[ $cword -ge 3 ]]; then
                 _devlink_direct_complete "dev"
+                _devlink_direct_complete "port"
             fi
             return
             ;;
