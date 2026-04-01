@@ -8943,19 +8943,24 @@ static int cmd_resource_dump_cb(const struct nlmsghdr *nlh, void *data)
 		return MNL_CB_ERROR;
 	}
 
-	if (ctx->print_resources)
+	if (ctx->print_resources) {
 		resources_show(ctx, tb);
+		resources_free(ctx->resources);
+		INIT_LIST_HEAD(&ctx->resources->resource_list);
+	}
 
 	return MNL_CB_OK;
 }
 
 static int cmd_resource_show(struct dl *dl)
 {
-	struct nlmsghdr *nlh;
+	uint16_t flags = NLM_F_REQUEST | NLM_F_ACK;
 	struct resource_ctx resource_ctx = {};
+	struct nlmsghdr *nlh;
 	int err;
 
-	err = dl_argv_parse(dl, DL_OPT_HANDLE, 0);
+	err = dl_argv_parse_with_selector(dl, &flags, DEVLINK_CMD_RESOURCE_DUMP,
+					  DL_OPT_HANDLE, 0, 0, 0);
 	if (err)
 		return err;
 
@@ -8965,19 +8970,21 @@ static int cmd_resource_show(struct dl *dl)
 
 	resource_ctx.print_resources = true;
 	nlh = mnlu_gen_socket_cmd_prepare(&dl->nlg, DEVLINK_CMD_RESOURCE_DUMP,
-			       NLM_F_REQUEST | NLM_F_ACK);
+					  flags);
 	dl_opts_put(nlh, dl);
 	pr_out_section_start(dl, "resources");
 	err = mnlu_gen_socket_sndrcv(&dl->nlg, nlh, cmd_resource_dump_cb,
 				  &resource_ctx);
 	pr_out_section_end(dl);
 	resource_ctx_fini(&resource_ctx);
+	if (err == -EOPNOTSUPP && (flags & NLM_F_DUMP))
+		pr_err("Dump not supported, please specify a device: devlink resource show DEV\n");
 	return err;
 }
 
 static void cmd_resource_help(void)
 {
-	pr_err("Usage: devlink resource show DEV\n"
+	pr_err("Usage: devlink resource show [ DEV ]\n"
 	       "       devlink resource set DEV path PATH size SIZE\n");
 }
 
