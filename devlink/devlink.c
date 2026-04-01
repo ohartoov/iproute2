@@ -8925,6 +8925,77 @@ static int resources_get(struct resource_ctx *ctx, struct nlattr **tb)
 	return resource_get(ctx, NULL, NULL, tb[DEVLINK_ATTR_RESOURCE_LIST]);
 }
 
+static void pr_out_port_resource_one(struct dl *dl, struct resource *resource,
+				     struct resource_ctx *ctx)
+{
+	struct resource *child_resource;
+
+	check_indent_newline(dl);
+	print_string(PRINT_ANY, "name", "name %s", resource->name);
+	if (dl->verbose)
+		resource_path_print(dl, ctx->resources, resource->id);
+	pr_out_u64(dl, "size", resource->size);
+	if (resource->size != resource->size_new)
+		pr_out_u64(dl, "size_new", resource->size_new);
+	if (resource->occ_valid)
+		print_uint(PRINT_ANY, "occ", " occ %u", resource->size_occ);
+	print_string(PRINT_ANY, "unit", " unit %s",
+		     resource_unit_str_get(resource->unit));
+	if (resource->size_min != resource->size_max) {
+		print_uint(PRINT_ANY, "size_min", " size_min %u",
+			   resource->size_min);
+		pr_out_u64(dl, "size_max", resource->size_max);
+		print_uint(PRINT_ANY, "size_gran", " size_gran %u",
+			   resource->size_gran);
+	}
+	resource_dpipe_tables_show(resource, ctx);
+	if (!dl->json_output)
+		__pr_out_newline();
+
+	if (list_empty(&resource->resource_list))
+		return;
+
+	if (ctx->pending_change) {
+		check_indent_newline(dl);
+		print_string(PRINT_ANY, "size_valid", "size_valid %s",
+			     resource->size_valid ? "true" : "false");
+	}
+	pr_out_array_start(dl, "resources");
+	list_for_each_entry(child_resource, &resource->resource_list, list) {
+		pr_out_entry_start(dl);
+		pr_out_port_resource_one(dl, child_resource, ctx);
+		pr_out_entry_end(dl);
+	}
+	pr_out_array_end(dl);
+}
+
+static void pr_out_port_resource(struct dl *dl, struct nlattr **tb)
+{
+	struct dpipe_ctx dpipe_ctx = {};
+	struct resource_ctx ctx = {};
+	struct resource *resource;
+	int err;
+
+	err = resource_ctx_init(&ctx, dl);
+	if (err)
+		return;
+
+	err = resources_get(&ctx, tb);
+	if (err)
+		goto out;
+
+	resources_dpipe_tables_init(&dpipe_ctx, &ctx, tb);
+
+	pr_out_port_handle_start_arr(dl, tb, false);
+	list_for_each_entry(resource, &ctx.resources->resource_list, list)
+		pr_out_port_resource_one(dl, resource, &ctx);
+	pr_out_port_handle_end(dl);
+
+	resources_dpipe_tables_fini(&dpipe_ctx, &ctx);
+out:
+	resource_ctx_fini(&ctx);
+}
+
 static int cmd_resource_dump_cb(const struct nlmsghdr *nlh, void *data)
 {
 	struct resource_ctx *ctx = data;
@@ -8936,6 +9007,12 @@ static int cmd_resource_dump_cb(const struct nlmsghdr *nlh, void *data)
 	if (!tb[DEVLINK_ATTR_BUS_NAME] || !tb[DEVLINK_ATTR_DEV_NAME] ||
 	    !tb[DEVLINK_ATTR_RESOURCE_LIST])
 		return MNL_CB_ERROR;
+
+	if (tb[DEVLINK_ATTR_PORT_INDEX]) {
+		if (ctx->print_resources)
+			pr_out_port_resource(ctx->dl, tb);
+		return MNL_CB_OK;
+	}
 
 	err = resources_get(ctx, tb);
 	if (err) {
