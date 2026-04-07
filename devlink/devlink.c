@@ -314,6 +314,7 @@ static int ifname_map_update(struct ifname_map *ifname_map, const char *ifname)
 #define DL_OPT_PORT_FN_RATE_TC_BWS	BIT(59)
 #define DL_OPT_HEALTH_REPORTER_BURST_PERIOD	BIT(60)
 
+#define DL_OPT_RESOURCE_SCOPE		BIT(62)
 struct dl_opts {
 	uint64_t present; /* flags of present items */
 	char *bus_name;
@@ -382,6 +383,7 @@ struct dl_opts {
 	bool selftests_opt[DEVLINK_ATTR_SELFTEST_ID_MAX + 1];
 	struct nla_bitfield32 port_fn_caps;
 	uint32_t port_fn_max_io_eqs;
+	uint32_t resource_scope_mask;
 };
 
 struct dl {
@@ -1473,6 +1475,19 @@ static int flash_overwrite_section_get(const char *sectionstr, uint32_t *mask)
 	return 0;
 }
 
+static int resource_scope_get(const char *scopestr, uint32_t *scope)
+{
+	if (strcmp(scopestr, "dev") == 0) {
+		*scope = DEVLINK_RESOURCE_SCOPE_DEV;
+	} else if (strcmp(scopestr, "port") == 0) {
+		*scope = DEVLINK_RESOURCE_SCOPE_PORT;
+	} else {
+		pr_err("Unknown resource scope \"%s\"\n", scopestr);
+		return -EINVAL;
+	}
+	return 0;
+}
+
 static int param_cmode_get(const char *cmodestr,
 			   enum devlink_param_cmode *cmode)
 {
@@ -1653,6 +1668,7 @@ static const struct dl_args_metadata dl_args_required[] = {
 	{DL_OPT_ESWITCH_ENCAP_MODE,   "E-Switch encapsulation option expected."},
 	{DL_OPT_RESOURCE_PATH,	      "Resource path expected."},
 	{DL_OPT_RESOURCE_SIZE,	      "Resource size expected."},
+	{DL_OPT_RESOURCE_SCOPE,	      "Resource scope expected (dev or port)."},
 	{DL_OPT_PARAM_NAME,	      "Parameter name expected."},
 	{DL_OPT_PARAM_VALUE,	      "Value to set expected."},
 	{DL_OPT_PARAM_CMODE,	      "Configuration mode expected."},
@@ -1985,6 +2001,19 @@ static int dl_argv_parse(struct dl *dl, uint64_t o_required,
 			if (err)
 				return err;
 			o_found |= DL_OPT_RESOURCE_SIZE;
+		} else if (dl_argv_match(dl, "scope") &&
+			   (o_all & DL_OPT_RESOURCE_SCOPE)) {
+			const char *scopestr;
+
+			dl_arg_inc(dl);
+			err = dl_argv_str(dl, &scopestr);
+			if (err)
+				return err;
+			err = resource_scope_get(scopestr,
+						 &opts->resource_scope_mask);
+			if (err)
+				return err;
+			o_found |= DL_OPT_RESOURCE_SCOPE;
 		} else if (dl_argv_match(dl, "name") &&
 			   (o_all & DL_OPT_PARAM_NAME)) {
 			dl_arg_inc(dl);
@@ -2666,6 +2695,9 @@ static void dl_opts_put(struct nlmsghdr *nlh, struct dl *dl)
 	if (opts->present & DL_OPT_RESOURCE_SIZE)
 		mnl_attr_put_u64(nlh, DEVLINK_ATTR_RESOURCE_SIZE,
 				 opts->resource_size);
+	if (opts->present & DL_OPT_RESOURCE_SCOPE)
+		mnl_attr_put_u32(nlh, DEVLINK_ATTR_RESOURCE_SCOPE_MASK,
+				 opts->resource_scope_mask);
 	if (opts->present & DL_OPT_PARAM_NAME)
 		mnl_attr_put_strz(nlh, DEVLINK_ATTR_PARAM_NAME,
 				  opts->param_name);
@@ -9033,14 +9065,36 @@ static int cmd_resource_show(struct dl *dl)
 {
 	uint16_t flags = NLM_F_REQUEST | NLM_F_ACK;
 	struct resource_ctx resource_ctx = {};
+	struct dl_opts *opts = &dl->opts;
 	struct nlmsghdr *nlh;
 	int err;
 
-	err = dl_argv_parse_with_selector(dl, &flags, DEVLINK_CMD_RESOURCE_DUMP,
-					  DL_OPT_HANDLE | DL_OPT_HANDLEP,
-					  0, 0, 0);
-	if (err)
-		return err;
+	/*
+	 * "scope" without a device handle: dump all with scope filter.
+	 * Handle it before dl_argv_parse_with_selector, which would
+	 * otherwise consume "scope" as a positional handle argument.
+	 */
+	if (dl_argv_match(dl, "scope")) {
+		const char *scopestr;
+
+		dl_arg_inc(dl);
+		err = dl_argv_str(dl, &scopestr);
+		if (err)
+			return err;
+		err = resource_scope_get(scopestr,
+					 &opts->resource_scope_mask);
+		if (err)
+			return err;
+		opts->present |= DL_OPT_RESOURCE_SCOPE;
+		flags |= NLM_F_DUMP;
+	} else {
+		err = dl_argv_parse_with_selector(
+			dl, &flags, DEVLINK_CMD_RESOURCE_DUMP,
+			DL_OPT_HANDLE | DL_OPT_HANDLEP,
+			0, 0, DL_OPT_RESOURCE_SCOPE);
+		if (err)
+			return err;
+	}
 
 	err = resource_ctx_init(&resource_ctx, dl);
 	if (err)
@@ -9062,7 +9116,8 @@ static int cmd_resource_show(struct dl *dl)
 
 static void cmd_resource_help(void)
 {
-	pr_err("Usage: devlink resource show [ DEV[/PORT_INDEX] ]\n"
+	pr_err("Usage: devlink resource show [ DEV[/PORT_INDEX] ]"
+	       " [ scope { dev | port } ]\n"
 	       "       devlink resource set DEV path PATH size SIZE\n");
 }
 
